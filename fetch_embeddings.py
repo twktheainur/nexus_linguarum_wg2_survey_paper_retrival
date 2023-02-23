@@ -44,7 +44,11 @@ def fetch_paper(id, secret =""):
         headers['x-api-key'] = s2_api_key
     
     result = get(query, headers=headers)
-    parsed = json.loads(result)
+    try:
+        parsed = json.loads(result)
+    except: 
+        print(id, result)
+        return None
     return parsed
 
 import json
@@ -58,17 +62,18 @@ final_selection = {paper['paperId']: paper for paper in papers}
 counter=20
 for paper_id in tqdm(final_selection):
     info = fetch_paper(paper_id, secret=s2_api_key)
-    if 'embedding' in info:
-        final_selection[paper_id]['embedding'] = info['embedding']['vector']
-    else:
-        final_selection[paper_id]['embedding']
-    if 'tldr' in info and info['tldr'] is not None:
-        final_selection[paper_id]['summary'] = info['tldr']['text']
-    else:
-        final_selection[paper_id]['summary'] = ""
+    if info is not None:
+        if 'embedding' in info:
+            final_selection[paper_id]['embedding'] = info['embedding']['vector']
+        else:
+            final_selection[paper_id]['embedding']
+        if 'tldr' in info and info['tldr'] is not None:
+            final_selection[paper_id]['summary'] = info['tldr']['text']
+        else:
+            final_selection[paper_id]['summary'] = ""
     
-    final_selection[paper_id]['year'] = info['year']
-    final_selection[paper_id]['authors'] = ", ".join([ author['name'] for author in info['authors']])
+        final_selection[paper_id]['year'] = info['year']
+        final_selection[paper_id]['authors'] = ", ".join([ author['name'] for author in info['authors']])
     sleep(0.01)
     
 
