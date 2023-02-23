@@ -1,7 +1,7 @@
 from argparse import ArgumentParser
 import itertools
 import json
-import sys
+import pathlib
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.neighbors import kneighbors_graph
 
@@ -16,52 +16,52 @@ parser = ArgumentParser("Embed paper titles and abstracts.")
 
 parser.add_argument(
     "input_papers",
-    nargs=1,
-    describe="Input json file resulting from SemanticScholar extraction")
+    type=pathlib.Path,
+    help="Input json file resulting from SemanticScholar extraction")
 
 parser.add_argument(
     "input_embeddings",
-    nargs=1,
-    describe="Input npy embedding file")
+    type=pathlib.Path,
+    help="Input npy embedding file")
 
 parser.add_argument(
     "input_scores",
-    nargs=1,
-    describe="Input npy with paper scores file")
+    type=pathlib.Path,
+    help="Input npy with paper scores file")
 
 parser.add_argument("--dim_red",
                     "-dr",
                     nargs=1,
                     default=["isomap"],
                     choices=["mds", "lle", "isomap", "t-sne"],
-                    describe="The dimension reduction technique to use. Default: isomap.")
+                    help="The dimension reduction technique to use. Default: isomap.")
 
 parser.add_argument("--num_dim",
                     "-nd",
                     nargs=1,
                     type=int,
                     default=[3],
-                    describe="The number of dimensions. Default: 3")
+                    help="The number of dimensions. Default: 3")
 
 parser.add_argument("--clustering",
                     "-c",
                     nargs=1,
                     default=["agglo"],
                     choices=["kmeans", "agglo", "spectral", "dbscan"],
-                    describe="The clustering method to use. Default: agglo")
+                    help="The clustering method to use. Default: agglo")
 
 parser.add_argument("--num_clusters", "-nc", nargs=1, type=int, default=[5])
 
 
 if __name__ == "__main__":
-    args = parser.parse_args(sys.argv)
+    args = parser.parse_args()
 
-    with open(args.input_papers[0]) as f:
+    with open(args.input_papers) as f:
         papers = json.load(f)
 
-    embedding = np.load(args.input_embeddings[0])
+    embedding = np.load(args.input_embeddings)
 
-    scores = np.load(args.input_scores[0])
+    scores = np.load(args.input_scores)
 
     connectivity = kneighbors_graph(
         embedding, n_neighbors=50, include_self=False
@@ -84,8 +84,8 @@ if __name__ == "__main__":
         red = TSNE(n_components=n_components)
     elif args.dim_red[0] == "lle":
         red = LocallyLinearEmbedding(n_components=n_components)
-    elif args.dim_red[0] == "mds":
-        red = MDS(n_components=2)
+    else:
+        red = MDS(n_components=n_components)
 
     matrix_2D = red.fit_transform(embedding)
 
@@ -96,7 +96,7 @@ if __name__ == "__main__":
             plt.scatter(matrix_2D.T[pair[0]],
                         matrix_2D.T[pair[1]], c=clustering.labels_)
             plt.colorbar()
-            fig.savefig(f"projection_{pair[0]}_{pair[1]}")
+            fig.savefig(f"projection_{pair[0]}_{pair[1]}.png")
 
     clustering.labels_.tolist()
     cluster_lists = []
@@ -107,5 +107,5 @@ if __name__ == "__main__":
             cluster_list.append(paper)
         print("Cluster", cli, len(cluster_list))
         cluster_lists.append(cluster_list)
-        with open(f"cluster_{cli}_papers.json") as f:
-            f.write(cluster_list)
+        with open(f"cluster_{cli}_papers.json", "w") as f:
+            json.dump(cluster_list, f)

@@ -1,5 +1,6 @@
 from argparse import ArgumentParser
 import json
+from pathlib import Path
 from pydoc import describe
 import sys
 
@@ -8,33 +9,32 @@ import torch
 from tqdm import tqdm, trange
 import numpy as np
 
-model = 'bigscience/bloom-560m'
 
-parser = ArgumentParser("Embed paper titles and abstracts.")
+parser = ArgumentParser()
 
 parser.add_argument(
     "input_file",
-    nargs=1,
-    describe="Input json file resulting from SemanticScholar extraction")
+    type=Path,
+    help="Input json file resulting from SemanticScholar extraction")
 
 parser.add_argument("--model",
                     "-m",
                     nargs=1,
                     default=["bigscience/bloom-560m"],
-                    describe="HF Hub Model to use. Default: bloom-560m")
+                    help="HF Hub Model to use. Default: bloom-560m")
 
 parser.add_argument("--device",
                     "-d",
                     nargs=1,
                     default=["cpu"],
-                    describe="Compute device to use. Default: cpu")
+                    help="Compute device to use. Default: cpu")
 
 parser.add_argument(
     "--limit",
     "-l",
     nargs=1,
     type=int,
-    describe=
+    help=
     "Apply a limit to the number of paper (first K papers in decreasing relevance score order)"
 )
 
@@ -42,13 +42,13 @@ parser.add_argument("--threshold",
                     "-t",
                     nargs=1,
                     type=float,
-                    describe="Apply a threshold filter to the papers.")
+                    help="Apply a threshold filter to the papers.")
 
 parser.add_argument("--batch_size",
                     nargs=1,
                     type=int,
-                    default=['1'],
-                    describe="Batch size for the embedding step. Default: 1")
+                    default=[1],
+                    help="Batch size for the embedding step. Default: 1")
 
 DEFAULT_PROMPT = """Include Natural Language Processing (NLP) papers that make use of Linked Data as an integral part of the method or system,
  where the system or method is explicitly designed to take advantage of Linked Data capabilities such as dynamicity, interoperability, 
@@ -61,13 +61,13 @@ parser.add_argument(
     nargs=1,
     type=str,
     default=[DEFAULT_PROMPT],
-    describe=
+    help=
     "The prompt is used to rerank papers vectors by similarity to promp when --promp_rerank is activated"
 )
 
-parser.add_argument("--prompt_rerank", "-r", action='store_true', describe="If set, reranks papers according to prompt")
+parser.add_argument("--prompt_rerank", "-r", action='store_true', help="If set, reranks papers according to prompt")
 
-parser.add_argument("--rerank_dist", "-ds", nargs=1, type=str, default=["L2"], describe="Distance fuction tu use for reranking. L2 or cos. Default: L2")
+parser.add_argument("--rerank_dist", "-ds", nargs=1, type=str, default=["L2"], help="Distance fuction tu use for reranking. L2 or cos. Default: L2")
 
 
 def hf_embedding(flat_papers,
@@ -112,9 +112,8 @@ def hf_embedding(flat_papers,
     return embeddings, scores
 
 
-def hf_prompt_embedding(prompt, model='bigscience/bloom-560m'):
+def hf_prompt_embedding(prompt, model='bigscience/bloom-560m', device="cpu"):
     import torch
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
     from transformers import AutoTokenizer, AutoModel
     tokenizer = AutoTokenizer.from_pretrained(model)
     model = AutoModel.from_pretrained(model)
@@ -140,47 +139,61 @@ def vec_eucl(A, B):
   return np.sqrt(np.einsum('ij,ij->i', a_min_b, a_min_b))
   
 if __name__ == "__main__":
-    args = parser.parse_args(sys.argv)
+    args = parser.parse_args()
 
     device = "cpu" if args.device[0] == "cpu" else (
     args.device[0] if torch.cuda.is_available() else "cpu")
 
-    with open(args.input_file[0]) as f:
+    model = args.model[0]
+    save_suffix = model.split("/")[1]
+
+    with open(args.input_file) as f:
         papers = json.load(f)
     flat_papers = list(papers.values())
     flat_papers = sorted(flat_papers,
                          key=lambda x: x['relevance_score'],
                          reverse=True)
-    if "limit" in args:
+    if args.limit is not None:
         flat_papers[:args.limit[0]]
-    if "threshold" in args:
+        save_suffix += f"_limit{args.limit[0]}"
+    if args.threshold:
+        save_suffix += f"_th{args.threshold[0]}"
         flat_papers = [
             paper for paper in flat_papers
             if paper['relevance_score'] > args.threshold[0]
         ]
 
-    model = args.model[0]
-    embedding, scores = hf_embedding(flat_papers, model=model, batch_size=args.batch_size[0], device=device)
+    if Path(f"paper_embeddings_{save_suffix}.npy").exists():
+        embedding = np.load(f"paper_embeddings_{save_suffix}.npy")
+        scores = np.load(f"paper_scores_{save_suffix}.npy")
+    else:
+        embedding, scores = hf_embedding(flat_papers, model=model, batch_size=args.batch_size[0], device=device)
+        np.save(f"paper_embeddings_{save_suffix}.npy", embedding)
+        np.save(f"paper_scores_{save_suffix}.npy", embedding)
 
-    save_suffix = model.split("/")[1]
 
-
-    if "prompt_rerank" in args:
-        prompt_vector = hf_prompt_embedding(args.prompt[0], model="bigscience/bloom-7b1")
+    if args.prompt_rerank:
+        
+        if Path(f"paper_prompt_{save_suffix}.npy").exists():
+            prompt_vector = np.load(f"paper_prompt_{save_suffix}.npy")
+        else:
+            prompt_vector = hf_prompt_embedding(args.prompt[0], model=model)
+            np.save(f"paper_prompt_{save_suffix}.npy", prompt_vector)
         tiled_prompt = np.tile(prompt_vector, (embedding.shape[0], 1))
 
         if args.rerank_dist[0] == "L2":
-          similarities = vec_eucl(tiled_prompt, embedding)
+            similarities = vec_eucl(tiled_prompt, embedding)
         else:
-          similarities = vec_cos(tiled_prompt, embedding)
-        permutation = np.flip(np.argsort(similarities))
-        top_k = [flat_papers[index] for index in permutation]
-        embedding = embedding[permutation]
+            similarities = vec_cos(tiled_prompt, embedding)
+            permutation = np.flip(np.argsort(similarities))
+            flat_papers = [flat_papers[index] for index in permutation]
+            embedding = embedding[permutation]
+
+        with open(f"papers_{save_suffix}.json", "w") as f:
+            json.dump(flat_papers, f)
+
         save_suffix +="_rank_permutation"
+        np.save(f"paper_embeddings_{save_suffix}.npy", embedding)
+        np.save(f"paper_scores_{save_suffix}.npy", embedding)
 
-        with open("papers_{save_suffix}.json") as f:
-          json.dump(top_k, f)
-
-
-np.savez(f"paper_embeddings_{save_suffix}.npz", embedding)
-np.savez(f"paper_scores_{save_suffix}.npz", embedding)
+    
