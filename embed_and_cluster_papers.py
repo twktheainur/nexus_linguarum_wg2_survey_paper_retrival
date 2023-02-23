@@ -178,6 +178,9 @@ if __name__ == "__main__":
         embedding = embedding[permutation]
         save_suffix +="_rank_permutation"
 
+        with open("papers_{save_suffix}.json") as f:
+          json.dump(top_k, f)
+
 
 np.savez(f"paper_embeddings_{save_suffix}.npz", embedding)
 np.savez(f"paper_scores_{save_suffix}.npz", embedding)
