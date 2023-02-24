@@ -12,7 +12,7 @@ from tqdm import tqdm, trange
 import numpy as np
 
 
-parser = ArgumentParser("Embed paper titles and abstracts.")
+parser = ArgumentParser(description="Embed paper titles and abstracts.")
 
 parser.add_argument(
     "input_papers",

@@ -23,6 +23,10 @@ parser.add_argument("--model",
                     default=["bigscience/bloom-560m"],
                     help="HF Hub Model to use. Default: bloom-560m")
 
+
+parser.add_argument("--model_cachedir", nargs=1,
+                    help="Specify transformers model cache directory", required=False)
+
 parser.add_argument("--device",
                     "-d",
                     nargs=1,
@@ -34,8 +38,7 @@ parser.add_argument(
     "-l",
     nargs=1,
     type=int,
-    help=
-    "Apply a limit to the number of paper (first K papers in decreasing relevance score order)"
+    help="Apply a limit to the number of paper (first K papers in decreasing relevance score order)"
 )
 
 parser.add_argument("--threshold",
@@ -61,17 +64,17 @@ parser.add_argument(
     nargs=1,
     type=str,
     default=[DEFAULT_PROMPT],
-    help=
-    "The prompt is used to rerank papers vectors by similarity to promp when --promp_rerank is activated"
+    help="The prompt is used to rerank papers vectors by similarity to promp when --promp_rerank is activated"
 )
 
-parser.add_argument("--prompt_rerank", "-r", action='store_true', help="If set, reranks papers according to prompt")
+parser.add_argument("--prompt_rerank", "-r", action='store_true',
+                    help="If set, reranks papers according to prompt")
 
-parser.add_argument("--rerank_dist", "-ds", nargs=1, type=str, default=["L2"], help="Distance fuction tu use for reranking. L2 or cos. Default: L2")
+parser.add_argument("--rerank_dist", "-ds", nargs=1, type=str, default=[
+                    "L2"], help="Distance fuction tu use for reranking. L2 or cos. Default: L2")
 
 
-def hf_embedding(flat_papers,
-                 model='bigscience/bloom-560m',
+def hf_embedding(flat_papers, tokenizer, model,
                  include_fields=None,
                  batch_size=10, device="cpu"):
     import torch
@@ -90,10 +93,6 @@ def hf_embedding(flat_papers,
         paper_strings.append(final_str)
         scores.append(paper['relevance_score'])
     scores = np.array(scores)
-    from transformers import AutoTokenizer, AutoModel
-    tokenizer = AutoTokenizer.from_pretrained(model)
-    model = AutoModel.from_pretrained(model)
-    model = model.to(device)
 
     embeddings = []
 
@@ -112,7 +111,7 @@ def hf_embedding(flat_papers,
     return embeddings, scores
 
 
-def hf_prompt_embedding(prompt, model='bigscience/bloom-560m', device="cpu"):
+def hf_prompt_embedding(prompt, tokenizer, model, device="cpu"):
     import torch
     from transformers import AutoTokenizer, AutoModel
     tokenizer = AutoTokenizer.from_pretrained(model)
@@ -128,24 +127,39 @@ def hf_prompt_embedding(prompt, model='bigscience/bloom-560m', device="cpu"):
                                                                         0, :]
         return vect
 
+
 def vec_cos(A, B):
     dot = np.einsum('ij,ij->i', A, B)
     norm_A = np.linalg.norm(A, axis=1)
     norm_B = np.linalg.norm(B, axis=1)
     return dot / norm_A*norm_B
 
+
 def vec_eucl(A, B):
-  a_min_b = A - B
-  return np.sqrt(np.einsum('ij,ij->i', a_min_b, a_min_b))
-  
+    a_min_b = A - B
+    return np.sqrt(np.einsum('ij,ij->i', a_min_b, a_min_b))
+
+
+def create_model(model_name, cache_dir=None):
+    from transformers import AutoTokenizer, AutoModel
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    if cache_dir != None:
+        model = AutoModel.from_pretrained(model_name, cache_dir=cache_dir)
+    else:
+        model = AutoModel.from_pretrained(model_name)
+    model = model.to(device)
+
+    return tokenizer, model
+
+
 if __name__ == "__main__":
     args = parser.parse_args()
 
     device = "cpu" if args.device[0] == "cpu" else (
-    args.device[0] if torch.cuda.is_available() else "cpu")
+        args.device[0] if torch.cuda.is_available() else "cpu")
 
-    model = args.model[0]
-    save_suffix = model.split("/")[1]
+    model_name = args.model[0]
+    save_suffix = model_name.split("/")[1]
 
     with open(args.input_file) as f:
         papers = json.load(f)
@@ -163,21 +177,30 @@ if __name__ == "__main__":
             if paper['relevance_score'] > args.threshold[0]
         ]
 
+    cache_dir = None
+    if args.model_cachedir:
+        cache_dir = args.model_cachedir[0]
+    tokenizer = None
+    model = None
     if Path(f"paper_embeddings_{save_suffix}.npy").exists():
         embedding = np.load(f"paper_embeddings_{save_suffix}.npy")
         scores = np.load(f"paper_scores_{save_suffix}.npy")
     else:
-        embedding, scores = hf_embedding(flat_papers, model=model, batch_size=args.batch_size[0], device=device)
+        tokenizer, model = create_model(model_name, cache_dir=cache_dir)
+
+        embedding, scores = hf_embedding(
+            flat_papers, tokenizer, model, batch_size=args.batch_size[0], device=device)
         np.save(f"paper_embeddings_{save_suffix}.npy", embedding)
         np.save(f"paper_scores_{save_suffix}.npy", embedding)
 
-
     if args.prompt_rerank:
-        
+        if model is None:
+            tokenizer, model = create_model(model_name, cache_dir=cache_dir)
         if Path(f"paper_prompt_{save_suffix}.npy").exists():
             prompt_vector = np.load(f"paper_prompt_{save_suffix}.npy")
         else:
-            prompt_vector = hf_prompt_embedding(args.prompt[0], model=model)
+            prompt_vector = hf_prompt_embedding(
+                args.prompt[0], tokenizer, model)
             np.save(f"paper_prompt_{save_suffix}.npy", prompt_vector)
         tiled_prompt = np.tile(prompt_vector, (embedding.shape[0], 1))
 
@@ -192,8 +215,6 @@ if __name__ == "__main__":
         with open(f"papers_{save_suffix}.json", "w") as f:
             json.dump(flat_papers, f)
 
-        save_suffix +="_rank_permutation"
+        save_suffix += "_rank_permutation"
         np.save(f"paper_embeddings_{save_suffix}.npy", embedding)
         np.save(f"paper_scores_{save_suffix}.npy", embedding)
-
-    
